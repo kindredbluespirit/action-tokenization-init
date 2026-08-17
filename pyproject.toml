@@ -1,7 +1,20 @@
 [project]
 name = "action-tokenization-init"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "pi0-FAST action tokenization demo with LeRobot + LIBERO + LoRA"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "lerobot[dataset,pi,peft]",
+    "numpy>=2.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/action_tokenization"]
+
+[tool.uv.sources]
+lerobot = { git = "https://github.com/huggingface/lerobot.git", tag = "v0.6.0" }
