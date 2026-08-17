@@ -1,12 +1,23 @@
 [project]
 name = "action-tokenization-init"
 version = "0.2.0"
-description = "pi0-FAST action tokenization demo with LeRobot + LIBERO + LoRA"
+description = "Video series + paper on robot action tokenization with LeRobot VLAs"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "lerobot[dataset,pi,peft]",
     "numpy>=2.0.0",
+    "scipy>=1.14.0",
+    "matplotlib>=3.9.0",
+    "tokenizers>=0.21.0",
+]
+
+[project.optional-dependencies]
+video = [
+    "manim>=0.19.0",
+    "manim-slides>=5.5.0",
+    "ipykernel>=6.29.0",
+    "jupyter>=1.1.0",
 ]
 
 [build-system]
