@@ -21,3 +21,7 @@ The Python project uses uv with hatchling, src layout (src/project-name/). Scrip
 Whenever you implement a plan, sometimes when I tell you, create a doc with all the details for future reference.
 
 Do not commit anything on your own.
+
+Whenever you generate something, keep the text very human, which means
+1. no "no x, no y, just z"
+2. no long hyphens or things like that
