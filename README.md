@@ -25,3 +25,4 @@ Do not commit anything on your own.
 Whenever you generate something, keep the text very human, which means
 1. no "no x, no y, just z"
 2. no long hyphens or things like that
+3. no "it doesn't just (verb1), it (verb2)s" or something similar
