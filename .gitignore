@@ -5,3 +5,4 @@ outputs/
 dist/
 site/public/
 .DS_Store
+.ipynb_checkpoints/
