@@ -137,7 +137,7 @@ write_nb(
             'print(f"{novel_word} -> {subwords}")\n'
         ),
         md(
-            "### Key Takeaway\n\n"
+            "### What We Learned\n\n"
             "**Tokenization = discretization + compression.** Any continuous signal "
             "that can be tokenized into a discrete vocabulary can be processed by a "
             "transformer using next-token prediction. In Part 2, we'll see how robot "
@@ -241,7 +241,7 @@ write_nb(
             '    print(f"Vocab size {vocab_size:3d}: {len(output.ids):2d} tokens -> {output.tokens}")\n'
         ),
         md(
-            "### Key Takeaway\n\n"
+            "### The Gist\n\n"
             "BPE learns compression rules from data. The vocabulary size controls "
             "the compression/sequence-length trade-off. "
             "In Part 3, we'll see how FAST action tokenization applies BPE "
@@ -259,14 +259,14 @@ write_nb(
             "# Part 2: How Real VLAs Represent Actions\n\n"
             "## Notebook 3 — ACT (Action Chunking Transformer)\n\n"
             "ACT (Zhao et al., RSS 2023) predicts **continuous action chunks** "
-            "using a Conditional Variational Autoencoder (CVAE). No tokenization — "
-            "actions are raw continuous vectors.\n\n"
+            "using a Conditional Variational Autoencoder (CVAE). "
+            "Actions are raw continuous vectors — there is no tokenization step.\n\n"
             "We load ACT from leRobot v0.6.0 and inspect its action handling."
         ),
         md(
             "### 1. Load ACT configuration\n\n"
-            "ACT is a policy that predicts chunks of actions directly. "
-            "No tokenization, no discretization — just continuous regression."
+            "ACT is a policy that predicts chunks of actions directly "
+            "via continuous regression."
         ),
         code(
             "from lerobot.policies.act.configuration_act import ACTConfig\n\n"
@@ -280,7 +280,9 @@ write_nb(
         md(
             "### 2. Action representation: pure continuous\n\n"
             "ACT outputs a tensor of shape `(batch, chunk_size, action_dim)`. "
-            "Each value is a raw float — no binning, no discretization, no tokens."
+            "Each value is a raw float. "
+            "By contrast, tokenization-based approaches like RT-1 bin "
+            "each dimension into hundreds of discrete tokens."
         ),
         code(
             "import torch\n\n"
@@ -298,14 +300,14 @@ write_nb(
             "# Compare: if this were RT-1 style binning (256 bins/dim)\n"
             "tokens_if_binned = chunk_size * action_dim  # 700 tokens\n"
             'print(f"\\nIf binning (256 bins/dim): {tokens_if_binned} tokens per chunk")'
-            'print(f"ACT uses 0 tokens — continuous vectors instead")\n'
+            'print(f"ACT uses 0 tokens: continuous vectors instead")\n'
         ),
         md(
             "### 3. CVAE: the stochastic action head\n\n"
-            "ACT doesn't just regress — it samples from a learned distribution. "
+            "ACT uses stochastic generation through a learned distribution. "
             "The CVAE encodes observations into a latent distribution (μ, σ), "
             "samples z, and decodes into action chunks. This captures multi-modal "
-            "action distributions (e.g., you could go left OR right around an obstacle)."
+            "action distributions (for example, you could go left or right around an obstacle)."
         ),
         code(
             "# ACT uses a CVAE (Conditional Variational Autoencoder)\n"
@@ -342,9 +344,9 @@ write_nb(
             'print("  Overlap: t=50..99 averaged with exp(-Δt/τ) weights")\n'
         ),
         md(
-            "### Key Takeaway\n\n"
+            "### The Bottom Line\n\n"
             "ACT represents actions as **continuous vectors with learned distributions**. "
-            "No tokenization, no discretization. The CVAE handles action multimodality. "
+            "The CVAE handles action multimodality by sampling from a learned latent space. "
             "This was the dominant paradigm before VLAs entered the picture."
         ),
     ],
@@ -444,9 +446,9 @@ write_nb(
             'print("  - More hyperparameters (noise schedule, steps)")\n'
         ),
         md(
-            "### Key Takeaway\n\n"
+            "### Summary\n\n"
             "Diffusion Policy generates continuous actions through iterative denoising. "
-            "No tokens, no bins, no vocabulary. The action emerges from the denoising process. "
+            "Actions are raw vectors produced by the denoising process, never discretized. "
             "This approach produces exceptionally smooth trajectories but trades off inference speed."
         ),
     ],
@@ -576,11 +578,11 @@ write_nb(
             'print("  → Similar philosophy to LoRA but structural rather than low-rank")\n'
         ),
         md(
-            "### Key Takeaway\n\n"
+            "### In Short\n\n"
             "pi0 keeps actions **continuous** and uses an **explicit action expert** — "
             "a separate transformer specialized for generating smooth action trajectories "
-            "via flow matching. No tokenization, no discrete vocabulary. The action expert "
-            "is a dedicated module, not a repurposed language head."
+            "via flow matching. The action expert is a dedicated module built for control, "
+            "not a repurposed language head."
         ),
     ],
 )
@@ -685,11 +687,11 @@ write_nb(
             'print("  pi0-FAST:    ~5 Hz (autoregressive decoding)")\n'
         ),
         md(
-            "### Key Takeaway\n\n"
+            "### In Summary\n\n"
             "SmolVLA uses cross-attention to decouple the VLM from the action expert. "
             "Actions are continuous, the expert is a separate transformer, and efficiency "
             "comes from the small backbone (500M) and reduced expert width. "
-            "Still no tokenization."
+            "No tokenization anywhere in the pipeline."
         ),
     ],
 )
@@ -810,10 +812,10 @@ write_nb(
             'print("  4. Action expert specializes better than shared backbone")\n'
         ),
         md(
-            "### Key Takeaway\n\n"
+            "### Where This Leaves Us\n\n"
             "pi0.5 completes the arc: from continuous (pi0) → tokenized (pi0-FAST) → "
             "back to continuous (pi0.5). The action expert persists throughout. "
-            "Tokenization is an experiment, not the destination."
+            "Tokenization was tried but the field continues to favor continuous action representations."
         ),
     ],
 )
@@ -955,7 +957,7 @@ write_nb(
             '    print(f"Shape mismatch — tokenizer may have different horizon/dim")\n'
         ),
         md(
-            "### Key Takeaway\n\n"
+            "### To Summarize\n\n"
             "FAST compresses action chunks via DCT + BPE, achieving 10× fewer tokens "
             "than naive per-dimension binning. The compression works because smooth "
             "motions are sparse in the frequency domain. In the next notebook, we'll "
@@ -1091,7 +1093,7 @@ write_nb(
             'print("  For real robots: inference speed matters more")\n'
         ),
         md(
-            "### Key Takeaway\n\n"
+            "### The Trade-Off\n\n"
             "pi0-FAST achieves 5× faster training by using the same cross-entropy "
             "objective as language models. But autoregressive token generation is "
             "slow at inference time — a fundamental limitation for real-time robot control. "
