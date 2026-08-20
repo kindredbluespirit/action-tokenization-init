@@ -241,6 +241,58 @@ write_nb(
             '    print(f"Vocab size {vocab_size:3d}: {len(output.ids):2d} tokens -> {output.tokens}")\n'
         ),
         md(
+            "### 6. From Text to Robot Actions: RT-1's Per-Dimension Binning\n\n"
+            "The simplest way to tokenize robot actions is per-dimension binning, "
+            "used by RT-1 (Brohan et al., 2022). Each degree of freedom "
+            "(x, y, z, roll, pitch, yaw, gripper) is treated as an independent "
+            "scalar and discretized into a fixed number of bins.\n\n"
+            "With 256 bins per dimension and a typical range of [-2, 2]:\n"
+            "- The continuous range is split into 256 equal-width bins (each ~0.016 wide)\n"
+            "- Each action step produces 7 tokens (one per dimension)\n"
+            "- An action chunk of 100 steps requires 700 tokens\n\n"
+            "This is lossy — small position differences get rounded to the same bin. "
+            "And it is expensive: each dimension needs its own discrete vocabulary. "
+            "In Part 3 we will see how FAST improves on this by operating "
+            "in the frequency domain."
+        ),
+        code(
+            "import numpy as np\n"
+            "\n"
+            "# A 7-DoF robot action: [x, y, z, roll, pitch, yaw, gripper]\n"
+            "# Values from a typical Franka arm in meters/radians\n"
+            "action = np.array([0.15, -0.02, 0.84, -0.12, 1.57, 0.03, 1.0])\n"
+            "\n"
+            "# RT-1 style: bin each dimension into 256 discrete values\n"
+            "n_bins = 256\n"
+            "bounds = (-2.0, 2.0)\n"
+            "\n"
+            "# Normalize to [0, 1], then snap to nearest bin\n"
+            "scaled = (action - bounds[0]) / (bounds[1] - bounds[0])\n"
+            "scaled = np.clip(scaled, 0.0, 1.0)\n"
+            "token_ids = (scaled * (n_bins - 1)).astype(int)\n"
+            "\n"
+            'print("Action (7-DoF):")\n'
+            'print(f"  x={action[0]:.2f}  y={action[1]:.2f}  z={action[2]:.2f}  "'
+            'f"roll={action[3]:.2f}  pitch={action[4]:.2f}  yaw={action[5]:.2f}  "'
+            'f"gripper={action[6]:.2f}")\n'
+            'print(f"  Token IDs (0-255): {token_ids.tolist()}")\n'
+            'print(f"  Tokens per action step: {len(token_ids)}")\n'
+            "\n"
+            "# For a 100-step chunk (same horizon as ACT)\n"
+            "chunk = 100\n"
+            "total_tokens = chunk * len(token_ids)\n"
+            'print(f"\\nChunk of {chunk} steps: {total_tokens} tokens")\n'
+            'print(f"  (FAST tokenizer reduces this to ~45 via DCT + BPE)")\n'
+            "\n"
+            "# Reconstruction: midpoint of each bin\n"
+            "bin_width = (bounds[1] - bounds[0]) / n_bins\n"
+            "reconstructed = bounds[0] + bin_width * (token_ids + 0.5)\n"
+            "error = np.abs(action - reconstructed)\n"
+            'print(f"\\nBin width: {bin_width:.4f}")\n'
+            'print(f"  Worst-case quantization error: {bin_width/2:.4f}")\n'
+            'print(f"  Actual error on this action:  {error.max():.4f}")\n'
+        ),
+        md(
             "### The Gist\n\n"
             "BPE learns compression rules from data. The vocabulary size controls "
             "the compression/sequence-length trade-off. "
@@ -264,7 +316,127 @@ write_nb(
             "We load ACT from leRobot v0.6.0 and inspect its action handling."
         ),
         md(
-            "### 1. Load ACT configuration\n\n"
+            "### 1. AE, VAE, CVAE, and KL Divergence\n\n"
+            "ACT uses a Conditional Variational Autoencoder (CVAE) as its "
+            "action head. Before we load ACT, let's build the intuition "
+            "from the ground up:\n\n"
+            "- **AE (Autoencoder)**: compress input through a bottleneck, "
+            "then reconstruct. Loss = MSE. The latent space has no structure.\n"
+            "- **VAE (Variational Autoencoder)**: the encoder outputs a "
+            "distribution (μ, σ). We sample z = μ + σ·ε and add a "
+            "KL divergence term to push the distribution toward N(0,1). "
+            "This regularizes the latent space so nearby latents "
+            "correspond to similar outputs.\n"
+            "- **CVAE (Conditional VAE)**: conditions both encoder and "
+            "decoder on an observation. ACT feeds in camera images and "
+            "joint states as the condition, so the latent z captures the "
+            "action distribution for a specific situation."
+        ),
+        code(
+            "import torch\n"
+            "import torch.nn as nn\n"
+            "\n"
+            "# ── Toy data: circle of 2D points ──\n"
+            "torch.manual_seed(42)\n"
+            "n = 500\n"
+            "theta = torch.rand(n) * 2 * torch.pi\n"
+            "radius = 1.0 + 0.1 * torch.randn(n)\n"
+            "data = torch.stack([radius * torch.cos(theta), radius * torch.sin(theta)], dim=1)\n"
+            "\n"
+            "# ── Autoencoder (AE) ──\n"
+            "class AE(nn.Module):\n"
+            "    def __init__(self, input_dim=2, latent_dim=1):\n"
+            "        super().__init__()\n"
+            "        self.encoder = nn.Sequential(\n"
+            "            nn.Linear(input_dim, 16), nn.ReLU(),\n"
+            "            nn.Linear(16, latent_dim)\n"
+            "        )\n"
+            "        self.decoder = nn.Sequential(\n"
+            "            nn.Linear(latent_dim, 16), nn.ReLU(),\n"
+            "            nn.Linear(16, input_dim)\n"
+            "        )\n"
+            "\n"
+            "    def forward(self, x):\n"
+            "        return self.decoder(self.encoder(x))\n"
+            "\n"
+            "ae = AE(latent_dim=1)\n"
+            "opt = torch.optim.Adam(ae.parameters(), lr=0.01)\n"
+            "loss_fn = nn.MSELoss()\n"
+            "\n"
+            "for step in range(500):\n"
+            "    opt.zero_grad()\n"
+            "    loss = loss_fn(ae(data), data)\n"
+            "    loss.backward()\n"
+            "    opt.step()\n"
+            "\n"
+            "with torch.no_grad():\n"
+            "    z_ae = ae.encoder(data)\n"
+            "    recon_ae = ae(data)\n"
+            "\n"
+            'print(f"AE reconstruction MSE: {loss_fn(recon_ae, data):.4f}")\n'
+            'print(f"Latent z range: [{z_ae.min():.2f}, {z_ae.max():.2f}]")\n'
+            'print(f"Latent z mean/std: {z_ae.mean():.3f} / {z_ae.std():.3f}")\n'
+            'print(f"No regularization — the latent space is unstructured.")\n'
+        ),
+        code(
+            "# ── Variational Autoencoder (VAE) ──\n"
+            "# Same architecture, but encoder outputs mu and log_var.\n"
+            "# We sample z = mu + sigma * epsilon (reparameterization trick).\n"
+            "# Loss = reconstruction_MSE + beta * KL_divergence\n"
+            "\n"
+            "class VAE(nn.Module):\n"
+            "    def __init__(self, input_dim=2, latent_dim=1):\n"
+            "        super().__init__()\n"
+            "        self.encoder = nn.Sequential(\n"
+            "            nn.Linear(input_dim, 16), nn.ReLU(),\n"
+            "        )\n"
+            "        self.mu_head = nn.Linear(16, latent_dim)\n"
+            "        self.logvar_head = nn.Linear(16, latent_dim)\n"
+            "        self.decoder = nn.Sequential(\n"
+            "            nn.Linear(latent_dim, 16), nn.ReLU(),\n"
+            "            nn.Linear(16, input_dim)\n"
+            "        )\n"
+            "\n"
+            "    def reparameterize(self, mu, logvar):\n"
+            "        std = torch.exp(0.5 * logvar)\n"
+            "        eps = torch.randn_like(std)\n"
+            "        return mu + eps * std\n"
+            "\n"
+            "    def forward(self, x):\n"
+            "        h = self.encoder(x)\n"
+            "        mu, logvar = self.mu_head(h), self.logvar_head(h)\n"
+            "        z = self.reparameterize(mu, logvar)\n"
+            "        return self.decoder(z), mu, logvar\n"
+            "\n"
+            "vae = VAE(latent_dim=1)\n"
+            "opt = torch.optim.Adam(vae.parameters(), lr=0.01)\n"
+            "\n"
+            "for step in range(1000):\n"
+            "    opt.zero_grad()\n"
+            "    recon, mu, logvar = vae(data)\n"
+            "    recon_loss = loss_fn(recon, data)\n"
+            "    # KL divergence: D_KL( N(mu,sigma) || N(0,1) )\n"
+            "    kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / n\n"
+            "    loss = recon_loss + 0.05 * kl_loss\n"
+            "    loss.backward()\n"
+            "    opt.step()\n"
+            "\n"
+            "with torch.no_grad():\n"
+            "    recon_vae, mu, logvar = vae(data)\n"
+            "    kl_value = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / n\n"
+            "\n"
+            'print(f"VAE reconstruction MSE: {loss_fn(recon_vae, data):.4f}")\n'
+            'print(f"KL divergence: {kl_value:.4f}")\n'
+            'print(f"VAE latent: mu={mu.mean():.3f} ± {torch.exp(0.5 * logvar).mean():.3f}")\n'
+            'print(f"AE latent:  mu={z_ae.mean():.3f} ± {z_ae.std():.3f}")\n'
+            'print(f"\\nKL divergence forces the latent toward N(0,1).")\n'
+            'print(f"The VAE latent is smoother and better regularized than the AE latent.")\n'
+            'print(f"\\nCVAE adds conditioning: both encoder and decoder receive")\n'
+            'print(f"the observation as input. ACT conditions on images + joint states")\n'
+            'print(f"so the latent z captures actions appropriate for what the robot sees.")\n'
+        ),
+        md(
+            "### 2. Load ACT configuration\n\n"
             "ACT is a policy that predicts chunks of actions directly "
             "via continuous regression."
         ),
@@ -278,7 +450,7 @@ write_nb(
             'print(f"Output shapes:     {cfg.output_shapes}")\n'
         ),
         md(
-            "### 2. Action representation: pure continuous\n\n"
+            "### 3. Action representation: pure continuous\n\n"
             "ACT outputs a tensor of shape `(batch, chunk_size, action_dim)`. "
             "Each value is a raw float. "
             "By contrast, tokenization-based approaches like RT-1 bin "
@@ -303,7 +475,7 @@ write_nb(
             'print(f"ACT uses 0 tokens: continuous vectors instead")\n'
         ),
         md(
-            "### 3. CVAE: the stochastic action head\n\n"
+            "### 4. CVAE: the stochastic action head\n\n"
             "ACT uses stochastic generation through a learned distribution. "
             "The CVAE encodes observations into a latent distribution (μ, σ), "
             "samples z, and decodes into action chunks. This captures multi-modal "
@@ -329,7 +501,7 @@ write_nb(
             'print("  pi0-FAST: Observation -> VLM -> FAST tokens -> Inverse DCT")\n'
         ),
         md(
-            "### 4. Temporal ensemble (smoothing)\n\n"
+            "### 5. Temporal ensemble (smoothing)\n\n"
             "ACT uses temporal ensembling to smooth consecutive action chunks. "
             "Overlapping chunks are averaged with exponential weighting."
         ),
