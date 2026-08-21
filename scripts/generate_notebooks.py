@@ -258,18 +258,18 @@ write_nb(
         code(
             "import numpy as np\n"
             "\n"
-            "# A 7-DoF robot action: [x, y, z, roll, pitch, yaw, gripper]\n"
-            "# Values from a typical Franka arm in meters/radians\n"
-            "action = np.array([0.15, -0.02, 0.84, -0.12, 1.57, 0.03, 1.0])\n"
+"# A 7-DoF robot action: [x, y, z, roll, pitch, yaw, gripper]\n"
+"action = np.random.uniform(-1.5, 1.5, size=7)\n"
+"# Example: [0.15, -0.02, 0.84, -0.12, 1.57, 0.03, 1.0]\n"
             "\n"
             "# RT-1 style: bin each dimension into 256 discrete values\n"
             "n_bins = 256\n"
             "bounds = (-2.0, 2.0)\n"
             "\n"
-            "# Normalize to [0, 1], then snap to nearest bin\n"
-            "scaled = (action - bounds[0]) / (bounds[1] - bounds[0])\n"
-            "scaled = np.clip(scaled, 0.0, 1.0)\n"
-            "token_ids = (scaled * (n_bins - 1)).astype(int)\n"
+            "# Normalize to [0, 1), then map to bin via floor\n"
+"scaled = (action - bounds[0]) / (bounds[1] - bounds[0])\n"
+"token_ids = np.floor(scaled * n_bins).astype(int)\n"
+"token_ids = np.clip(token_ids, 0, n_bins - 1)\n"
             "\n"
             'print("Action (7-DoF):")\n'
             'print(f"  x={action[0]:.2f}  y={action[1]:.2f}  z={action[2]:.2f}  "'
@@ -286,11 +286,16 @@ write_nb(
             "\n"
             "# Reconstruction: midpoint of each bin\n"
             "bin_width = (bounds[1] - bounds[0]) / n_bins\n"
-            "reconstructed = bounds[0] + bin_width * (token_ids + 0.5)\n"
-            "error = np.abs(action - reconstructed)\n"
-            'print(f"\\nBin width: {bin_width:.4f}")\n'
-            'print(f"  Worst-case quantization error: {bin_width/2:.4f}")\n'
-            'print(f"  Actual error on this action:  {error.max():.4f}")\n'
+"reconstructed = bounds[0] + bin_width * (token_ids + 0.5)\n"
+"error = np.abs(action - reconstructed)\n"
+'print(f"\\nReconstructed action:")\n'
+'print(f"  x={reconstructed[0]:.4f}  y={reconstructed[1]:.4f}  z={reconstructed[2]:.4f}  "'
+'f"roll={reconstructed[3]:.4f}  pitch={reconstructed[4]:.4f}  yaw={reconstructed[5]:.4f}  "'
+'f"gripper={reconstructed[6]:.4f}")\n'
+'print(f"  Abs error: {np.array2string(error, precision=4)}")\n'
+'print(f"\\nBin width: {bin_width:.4f}")\n'
+'print(f"  Worst-case quantization error: {bin_width/2:.4f}")\n'
+'print(f"  Actual max error: {error.max():.4f}")\n'
         ),
         md(
             "### The Gist\n\n"
