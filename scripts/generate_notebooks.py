@@ -256,63 +256,6 @@ write_nb(
             '    print(f"Vocab size {vocab_size:3d}: {len(output.ids):2d} tokens -> {output.tokens}")\n'
         ),
         md(
-            "### 6. From Text to Robot Actions: RT-1's Per-Dimension Binning\n\n"
-            "The simplest way to tokenize robot actions is per-dimension binning, "
-            "used by RT-1 (Brohan et al., 2022). Each degree of freedom "
-            "(x, y, z, roll, pitch, yaw, gripper) is treated as an independent "
-            "scalar and discretized into a fixed number of bins.\n\n"
-            "With 256 bins per dimension and a typical range of [-2, 2]:\n"
-            "- The continuous range is split into 256 equal-width bins (each ~0.016 wide)\n"
-            "- Each action step produces 7 tokens (one per dimension)\n"
-            "- An action chunk of 100 steps requires 700 tokens\n\n"
-            "This is lossy — small position differences get rounded to the same bin. "
-            "And it is expensive: each dimension needs its own discrete vocabulary. "
-            "In Part 3 we will see how FAST improves on this by operating "
-            "in the frequency domain."
-        ),
-        code(
-            "import numpy as np\n"
-            "\n"
-"# A 7-DoF robot action: [x, y, z, roll, pitch, yaw, gripper]\n"
-"action = np.random.uniform(-1.5, 1.5, size=7)\n"
-"# Example: [0.15, -0.02, 0.84, -0.12, 1.57, 0.03, 1.0]\n"
-            "\n"
-            "# RT-1 style: bin each dimension into 256 discrete values\n"
-            "n_bins = 256\n"
-            "bounds = (-2.0, 2.0)\n"
-            "\n"
-            "# Normalize to [0, 1), then map to bin via floor\n"
-"scaled = (action - bounds[0]) / (bounds[1] - bounds[0])\n"
-"token_ids = np.floor(scaled * n_bins).astype(int)\n"
-"token_ids = np.clip(token_ids, 0, n_bins - 1)\n"
-            "\n"
-            'print("Action (7-DoF):")\n'
-            'print(f"  x={action[0]:.2f}  y={action[1]:.2f}  z={action[2]:.2f}  "'
-            'f"roll={action[3]:.2f}  pitch={action[4]:.2f}  yaw={action[5]:.2f}  "'
-            'f"gripper={action[6]:.2f}")\n'
-            'print(f"  Token IDs (0-255): {token_ids.tolist()}")\n'
-            'print(f"  Tokens per action step: {len(token_ids)}")\n'
-            "\n"
-            "# For a 100-step chunk (same horizon as ACT)\n"
-            "chunk = 100\n"
-            "total_tokens = chunk * len(token_ids)\n"
-            'print(f"\\nChunk of {chunk} steps: {total_tokens} tokens")\n'
-            'print(f"  (FAST tokenizer reduces this to ~45 via DCT + BPE)")\n'
-            "\n"
-            "# Reconstruction: midpoint of each bin\n"
-            "bin_width = (bounds[1] - bounds[0]) / n_bins\n"
-"reconstructed = bounds[0] + bin_width * (token_ids + 0.5)\n"
-"error = np.abs(action - reconstructed)\n"
-'print(f"\\nReconstructed action:")\n'
-'print(f"  x={reconstructed[0]:.4f}  y={reconstructed[1]:.4f}  z={reconstructed[2]:.4f}  "'
-'f"roll={reconstructed[3]:.4f}  pitch={reconstructed[4]:.4f}  yaw={reconstructed[5]:.4f}  "'
-'f"gripper={reconstructed[6]:.4f}")\n'
-'print(f"  Abs error: {np.array2string(error, precision=4)}")\n'
-'print(f"\\nBin width: {bin_width:.4f}")\n'
-'print(f"  Worst-case quantization error: {bin_width/2:.4f}")\n'
-'print(f"  Actual max error: {error.max():.4f}")\n'
-        ),
-        md(
             "### The Gist\n\n"
             "BPE learns compression rules from data. The vocabulary size controls "
             "the compression/sequence-length trade-off. "
@@ -321,200 +264,43 @@ write_nb(
         ),
     ],
 )
+write_nb(
+    "notebooks/part1/03_lossy_compression.ipynb",
+    [
+        md(
+            "# Part 1: Tokenization and Vocabulary\n\n"
+            "## Notebook 3 — Lossy Compression: Tokenization, AE, and VAE\n\n"
+            "In Notebook 1 and 2 we saw that tokenization discards "
+            "information to fit text into a fixed vocabulary. The same "
+            "idea appears across machine learning under different names: "
+            "autoencoders, VAEs, quantization. This notebook connects "
+            "the dots.\n\n"
+            "- Tokenization is **discrete** lossy compression (integers)\n"
+            "- Autoencoders are **continuous** lossy compression (floats)\n"
+            "- A VAE adds structure so you can sample from the compressed space\n"
+            "- VQ-VAE bridges the two by quantizing the continuous latent into discrete codes\n"
+            "- We end with RT-1's action binning as a concrete example of naive discrete compression in robotics"
+        ),
+    ],
+)
+
+
 
 # ── Part 2 ──────────────────────────────────────────────────────────────
 
 write_nb(
-    "notebooks/part2/03_act.ipynb",
+    "notebooks/part2/04_act.ipynb",
     [
         md(
             "# Part 2: How Real VLAs Represent Actions\n\n"
-            "## Notebook 3 — ACT (Action Chunking Transformer)\n\n"
+            "## Notebook 4 — ACT (Action Chunking Transformer)\n\n"
             "ACT (Zhao et al., RSS 2023) predicts **continuous action chunks** "
             "using a Conditional Variational Autoencoder (CVAE). "
-            "Actions are raw continuous vectors — there is no tokenization step.\n\n"
+            "See Notebook 3 for the AE/VAE/KL divergence background. ""Actions are raw continuous vectors — there is no tokenization step.\n\n"
             "We load ACT from leRobot v0.6.0 and inspect its action handling."
         ),
         md(
-            "### 1. AE, VAE, CVAE, and KL Divergence\n\n"
-            "ACT uses a Conditional Variational Autoencoder (CVAE) as its "
-            "action head. Before we load ACT, let's build the intuition "
-            "from the ground up.\n\n"
-            "In the demos below, the AE and VAE are **self-supervised**: "
-            "the encoder compresses an input x into a latent z, and the "
-            "decoder tries to reconstruct x from z. The input and the "
-            "target are the same (a circle of 2D points).\n\n"
-            "- **AE (Autoencoder)**: compress input through a bottleneck, "
-            "then reconstruct. Loss = MSE. The latent space has no structure.\n"
-            "- **VAE (Variational Autoencoder)**: the encoder outputs a "
-            "distribution (μ, σ). We sample z = μ + σ·ε and add a "
-            "KL divergence term to push the distribution toward N(0,1). "
-            "This regularizes the latent space so nearby latents "
-            "correspond to similar outputs.\n"
-            "- **CVAE (Conditional VAE)**: conditions both encoder and "
-            "decoder on an observation. In ACT, the encoder takes "
-            "(images, joint states, actions) and produces z; the decoder "
-            "takes (images, joint states, z) and outputs the action "
-            "chunk. The encoder sees the ground-truth action during "
-            "training, but the decoder is the one that produces it."
-        ),
-        code(
-            "import torch\n"
-            "import torch.nn as nn\n"
-            "\n"
-            "# ── Toy data: circle of 2D points ──\n"
-            "torch.manual_seed(42)\n"
-            "n = 500\n"
-            "theta = torch.rand(n) * 2 * torch.pi\n"
-            "radius = 1.0 + 0.1 * torch.randn(n)\n"
-            "data = torch.stack([radius * torch.cos(theta), radius * torch.sin(theta)], dim=1)\n"
-            "\n"
-            "# ── Autoencoder (AE) ──\n"
-            "class AE(nn.Module):\n"
-            "    def __init__(self, input_dim=2, latent_dim=1):\n"
-            "        super().__init__()\n"
-            "        self.encoder = nn.Sequential(\n"
-            "            nn.Linear(input_dim, 16), nn.ReLU(),\n"
-            "            nn.Linear(16, latent_dim)\n"
-            "        )\n"
-            "        self.decoder = nn.Sequential(\n"
-            "            nn.Linear(latent_dim, 16), nn.ReLU(),\n"
-            "            nn.Linear(16, input_dim)\n"
-            "        )\n"
-            "\n"
-            "    def forward(self, x):\n"
-            "        return self.decoder(self.encoder(x))\n"
-            "\n"
-            "ae = AE(latent_dim=1)\n"
-            "opt = torch.optim.Adam(ae.parameters(), lr=0.01)\n"
-            "loss_fn = nn.MSELoss()\n"
-            "\n"
-            "for step in range(500):\n"
-            "    opt.zero_grad()\n"
-            "    loss = loss_fn(ae(data), data)\n"
-            "    loss.backward()\n"
-            "    opt.step()\n"
-            "\n"
-            "with torch.no_grad():\n"
-            "    z_ae = ae.encoder(data)\n"
-            "    recon_ae = ae(data)\n"
-            "\n"
-            'print(f"AE reconstruction MSE: {loss_fn(recon_ae, data):.4f}")\n'
-            'print(f"Latent z range: [{z_ae.min():.2f}, {z_ae.max():.2f}]")\n'
-            'print(f"Latent z mean/std: {z_ae.mean():.3f} / {z_ae.std():.3f}")\n'
-            'print(f"No regularization — the latent space is unstructured.")\n'
-        ),
-        md(
-            "An autoencoder and a tokenizer are two forms of the same idea: "
-            "**lossy compression**. A tokenizer compresses text into a fixed "
-            "vocabulary of discrete symbols, discarding information that does "
-            "not fit the vocabulary. An autoencoder compresses data through "
-            "a low-dimensional bottleneck, discarding what cannot be expressed "
-            "in fewer dimensions.\n\n"
-            "The difference is that the AE's latent z is continuous (any real "
-            "value along the bottleneck) while a tokenizer produces discrete "
-            "integer IDs. To bridge the gap, you quantize the latent into "
-            "discrete codes — that is what VQ-VAE does, and it is the same "
-            "principle behind how FAST compresses action chunks via DCT + BPE "
-            "(Part 3)."
-        ),
-        code(
-            "# ── Variational Autoencoder (VAE) ──\n"
-            "# Encoder outputs mu and log_var. Sample z = mu + sigma * epsilon.\n"
-            "# Loss = reconstruction_MSE + beta * KL( q(z|x) || N(0,1) )\n"
-            "# The KL term pushes the data-dependent posterior toward a fixed prior.\n"
-            "\n"
-            "class VAE(nn.Module):\n"
-            "    def __init__(self, input_dim=2, latent_dim=1):\n"
-            "        super().__init__()\n"
-            "        self.encoder = nn.Sequential(\n"
-            "            nn.Linear(input_dim, 16), nn.ReLU(),\n"
-            "        )\n"
-            "        self.mu_head = nn.Linear(16, latent_dim)\n"
-            "        self.logvar_head = nn.Linear(16, latent_dim)\n"
-            "        self.decoder = nn.Sequential(\n"
-            "            nn.Linear(latent_dim, 16), nn.ReLU(),\n"
-            "            nn.Linear(16, input_dim)\n"
-            "        )\n"
-            "\n"
-            "    def reparameterize(self, mu, logvar):\n"
-            "        std = torch.exp(0.5 * logvar)\n"
-            "        eps = torch.randn_like(std)\n"
-            "        return mu + eps * std\n"
-            "\n"
-            "    def forward(self, x):\n"
-            "        h = self.encoder(x)\n"
-            "        mu, logvar = self.mu_head(h), self.logvar_head(h)\n"
-            "        z = self.reparameterize(mu, logvar)\n"
-            "        return self.decoder(z), mu, logvar\n"
-            "\n"
-            "# Train VAEs with different KL weights to see the tradeoff\n"
-            "beta_values = [0.001, 0.05, 1.0]\n"
-            "trained_vaes = {}\n"
-            "\n"
-            "for beta in beta_values:\n"
-            "    vae = VAE(latent_dim=1)\n"
-            "    opt = torch.optim.Adam(vae.parameters(), lr=0.01)\n"
-            "    for step in range(1000):\n"
-            "        opt.zero_grad()\n"
-            "        recon, mu, logvar = vae(data)\n"
-            "        recon_loss = loss_fn(recon, data)\n"
-            "        kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / n\n"
-            "        loss = recon_loss + beta * kl_loss\n"
-            "        loss.backward()\n"
-            "        opt.step()\n"
-            "    trained_vaes[beta] = vae\n"
-            "\n"
-            "# Compare AE vs VAE at different beta values\n"
-            "with torch.no_grad():\n"
-            '    print(f"{\'Model\':<16} {\'β\':>8} {\'Recon MSE\':>12} {\'KL Div\':>12} {\'μ mean\':>10} {\'σ mean\':>10}")\n'
-            "    print('─' * 72)\n"
-            '    print(f"{\'AE (no KL)\':<16} {\'—\':>8} {loss_fn(recon_ae, data).item():>12.4f} {\'—\':>12} {z_ae.mean().item():>10.3f} {z_ae.std().item():>10.3f}")\n'
-            "    for beta in beta_values:\n"
-            "        vae = trained_vaes[beta]\n"
-            "        recon, mu, logvar = vae(data)\n"
-            "        kl_value = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / n\n"
-            "        sigma = torch.exp(0.5 * logvar)\n"
-            '        print(f"{\'VAE\':<16} {beta:>8.3f} {loss_fn(recon, data).item():>12.4f} {kl_value.item():>12.4f} {mu.mean().item():>10.3f} {sigma.mean().item():>10.3f}")\n'
-            "\n"
-            "# Generate from the prior: sample z ~ N(0,1), decode, check quality\n"
-            'print(f"\\nGenerate by sampling z ~ N(0,1) and decoding:")\n'
-            "for beta in beta_values:\n"
-            "    vae = trained_vaes[beta]\n"
-            "    z_sample = torch.randn(100, 1)\n"
-            "    gen = vae.decoder(z_sample)\n"
-            "    # Distance from each generated point to nearest real data point\n"
-            "    avg_dist = torch.cdist(gen, data).min(dim=1).values.mean()\n"
-            '    print(f"  β={beta:.3f}: avg distance to nearest data = {avg_dist:.3f}")\n'
-            'print(f"\\nLow β → good reconstruction, latent is unstructured (bad for generation).")\n'
-            'print(f"High β → latent ≈ N(0,1) (good for generation), poor reconstruction.")\n'
-        ),
-        md(
-            "### Why N(0,1)?\n\n"
-            "The prior is not arbitrary. When you want to **generate** new data "
-            "with a VAE, you sample z ~ N(0,1) and run the decoder. If the "
-            "latent distribution during training was unconstrained (like the AE), "
-            "a random z from N(0,1) would land in a region the decoder never "
-            "saw during training and produce garbage.\n\n"
-            "KL divergence solves this by pulling the encoder's output "
-            "distribution toward N(0,1). The two forces in the loss are:\n\n"
-            "| Term | What it does | Set β to... |\n"
-            "|---|---|---|\n"
-            "| Reconstruction (MSE) | Push z to capture input details "
-            "| ...control this vs KL |\n"
-            "| KL divergence | Pull q(z\\|x) toward N(0,1) "
-            "| ...control this vs MSE |\n\n"
-            "At β=0.001, MSE dominates — the latent encodes data well but "
-            "ignores the prior. At β=1.0, KL dominates — the latent matches "
-            "N(0,1) perfectly but loses reconstruction quality. In practice, "
-            "β is tuned as a hyperparameter (typical range 0.001–0.1).\n\n"
-            "**CVAE** extends this by conditioning both encoder and decoder "
-            "on an observation. ACT feeds in camera images and joint states "
-            "as the condition, so the latent z captures the action "
-            "distribution for a specific situation."
-        ),
-        md(
-            "### 2. Load ACT configuration\n\n"
+            "### 1. Load ACT configuration\n\n"
             "ACT is a policy that predicts chunks of actions directly "
             "via continuous regression."
         ),
@@ -528,7 +314,7 @@ write_nb(
             'print(f"Output shapes:     {cfg.output_shapes}")\n'
         ),
         md(
-            "### 3. Action representation: pure continuous\n\n"
+            "### 2. Action representation: pure continuous\n\n"
             "ACT outputs a tensor of shape `(batch, chunk_size, action_dim)`. "
             "Each value is a raw float. "
             "By contrast, tokenization-based approaches like RT-1 bin "
@@ -553,7 +339,7 @@ write_nb(
             'print(f"ACT uses 0 tokens: continuous vectors instead")\n'
         ),
         md(
-            "### 4. CVAE: the stochastic action head\n\n"
+            "### 3. CVAE: the stochastic action head\n\n"
             "ACT uses stochastic generation through a learned distribution. "
             "The CVAE encodes observations into a latent distribution (μ, σ), "
             "samples z, and decodes into action chunks. This captures multi-modal "
@@ -579,7 +365,7 @@ write_nb(
             'print("  pi0-FAST: Observation -> VLM -> FAST tokens -> Inverse DCT")\n'
         ),
         md(
-            "### 5. Temporal ensemble (smoothing)\n\n"
+            "### 4. Temporal ensemble (smoothing)\n\n"
             "ACT uses temporal ensembling to smooth consecutive action chunks. "
             "Overlapping chunks are averaged with exponential weighting."
         ),
@@ -603,11 +389,11 @@ write_nb(
 )
 
 write_nb(
-    "notebooks/part2/04_diffusion.ipynb",
+    "notebooks/part2/05_diffusion.ipynb",
     [
         md(
             "# Part 2: How Real VLAs Represent Actions\n\n"
-            "## Notebook 4 — Diffusion Policy\n\n"
+            "## Notebook 5 — Diffusion Policy\n\n"
             "Diffusion Policy (Chi et al., RSS 2023) generates **continuous action chunks** "
             "by iteratively denoising from Gaussian noise. Actions are never discretized — "
             "they emerge from a learned denoising process.\n\n"
@@ -705,11 +491,11 @@ write_nb(
 )
 
 write_nb(
-    "notebooks/part2/05_pi0.ipynb",
+    "notebooks/part2/06_pi0.ipynb",
     [
         md(
             "# Part 2: How Real VLAs Represent Actions\n\n"
-            "## Notebook 5 — π₀ (pi0): Flow Matching + Action Expert\n\n"
+            "## Notebook 6 — π₀ (pi0): Flow Matching + Action Expert\n\n"
             "pi0 (Physical Intelligence, 2024) is a VLA that augments a pre-trained "
             "PaliGemma VLM with a dedicated **action expert**. Actions are generated "
             "via **flow matching** — a continuous ODE-based approach related to diffusion.\n\n"
@@ -838,11 +624,11 @@ write_nb(
 )
 
 write_nb(
-    "notebooks/part2/06_smolvla.ipynb",
+    "notebooks/part2/07_smolvla.ipynb",
     [
         md(
             "# Part 2: How Real VLAs Represent Actions\n\n"
-            "## Notebook 6 — SmolVLA: Cross-Attention Action Expert\n\n"
+            "## Notebook 7 — SmolVLA: Cross-Attention Action Expert\n\n"
             "SmolVLA (HuggingFace, 2025) is a lightweight VLA built on SmolVLM2 (500M). "
             "Unlike pi0 which passes action tokens directly into the transformer, "
             "SmolVLA uses **cross-attention** between the VLM latents and the action expert."
@@ -895,7 +681,7 @@ write_nb(
             'print("  └────────────────────────────────┘")\n'
         ),
         md(
-            "### 3. Action representation: continuous regression\n\n"
+            "### 2. Action representation: continuous regression\n\n"
             "Like all models in Part 2, SmolVLA outputs continuous actions. "
             "The action_in_proj/action_out_proj MLPs project to/from the "
             "expert's hidden dimension."
@@ -947,11 +733,11 @@ write_nb(
 )
 
 write_nb(
-    "notebooks/part2/07_pi05.ipynb",
+    "notebooks/part2/08_pi05.ipynb",
     [
         md(
             "# Part 2: How Real VLAs Represent Actions\n\n"
-            "## Notebook 7 — π₀.₅ (pi0.5): Flow Matching + adaRMS\n\n"
+            "## Notebook 8 — π₀.₅ (pi0.5): Flow Matching + adaRMS\n\n"
             "pi0.5 is Physical Intelligence's generalization-focused successor to pi0. "
             "In the leRobot implementation, it uses **flow matching with adaRMS conditioning** "
             "— an improved version of pi0's architecture. Notably, it does NOT use FAST "
@@ -1073,11 +859,11 @@ write_nb(
 # ── Part 3 ──────────────────────────────────────────────────────────────
 
 write_nb(
-    "notebooks/part3/08_fast_pipeline.ipynb",
+    "notebooks/part3/09_fast_pipeline.ipynb",
     [
         md(
             "# Part 3: pi0-FAST — The Tokenization Experiment\n\n"
-            "## Notebook 8 — The FAST Pipeline Step by Step\n\n"
+            "## Notebook 9 — The FAST Pipeline Step by Step\n\n"
             "FAST (Frequency-space Action Sequence Tokenization) converts continuous "
             "action chunks into discrete tokens via:\n\n"
             "1. **Normalize** action chunk to [-1, 1]\n"
@@ -1217,11 +1003,11 @@ write_nb(
 )
 
 write_nb(
-    "notebooks/part3/09_pi0fast_inference.ipynb",
+    "notebooks/part3/10_pi0fast_inference.ipynb",
     [
         md(
             "# Part 3: pi0-FAST — The Tokenization Experiment\n\n"
-            "## Notebook 9 — pi0-FAST: Autoregressive Action Generation\n\n"
+            "## Notebook 10 — pi0-FAST: Autoregressive Action Generation\n\n"
             "pi0-FAST replaces pi0's flow matching action head with autoregressive "
             "FAST token prediction. The VLM backbone (SigLIP + Gemma 2B) directly "
             "outputs discrete action tokens — no separate action expert."
@@ -1353,11 +1139,11 @@ write_nb(
 )
 
 write_nb(
-    "notebooks/part3/10_comparison.ipynb",
+    "notebooks/part3/11_comparison.ipynb",
     [
         md(
             "# Part 3: Conclusion\n\n"
-            "## Notebook 10 — Complete Comparison\n\n"
+            "## Notebook 11 — Complete Comparison\n\n"
             "We've now inspected six models available in leRobot v0.6.0. "
             "Here's the full comparison of how each represents robot actions."
         ),
