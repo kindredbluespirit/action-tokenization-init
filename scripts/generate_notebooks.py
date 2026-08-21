@@ -339,7 +339,11 @@ write_nb(
             "### 1. AE, VAE, CVAE, and KL Divergence\n\n"
             "ACT uses a Conditional Variational Autoencoder (CVAE) as its "
             "action head. Before we load ACT, let's build the intuition "
-            "from the ground up:\n\n"
+            "from the ground up.\n\n"
+            "In the demos below, the AE and VAE are **self-supervised**: "
+            "the encoder compresses an input x into a latent z, and the "
+            "decoder tries to reconstruct x from z. The input and the "
+            "target are the same (a circle of 2D points).\n\n"
             "- **AE (Autoencoder)**: compress input through a bottleneck, "
             "then reconstruct. Loss = MSE. The latent space has no structure.\n"
             "- **VAE (Variational Autoencoder)**: the encoder outputs a "
@@ -348,9 +352,11 @@ write_nb(
             "This regularizes the latent space so nearby latents "
             "correspond to similar outputs.\n"
             "- **CVAE (Conditional VAE)**: conditions both encoder and "
-            "decoder on an observation. ACT feeds in camera images and "
-            "joint states as the condition, so the latent z captures the "
-            "action distribution for a specific situation."
+            "decoder on an observation. In ACT, the encoder takes "
+            "(images, joint states, actions) and produces z; the decoder "
+            "takes (images, joint states, z) and outputs the action "
+            "chunk. The encoder sees the ground-truth action during "
+            "training, but the decoder is the one that produces it."
         ),
         code(
             "import torch\n"
@@ -398,11 +404,25 @@ write_nb(
             'print(f"Latent z mean/std: {z_ae.mean():.3f} / {z_ae.std():.3f}")\n'
             'print(f"No regularization — the latent space is unstructured.")\n'
         ),
+        md(
+            "An autoencoder and a tokenizer are two forms of the same idea: "
+            "**lossy compression**. A tokenizer compresses text into a fixed "
+            "vocabulary of discrete symbols, discarding information that does "
+            "not fit the vocabulary. An autoencoder compresses data through "
+            "a low-dimensional bottleneck, discarding what cannot be expressed "
+            "in fewer dimensions.\n\n"
+            "The difference is that the AE's latent z is continuous (any real "
+            "value along the bottleneck) while a tokenizer produces discrete "
+            "integer IDs. To bridge the gap, you quantize the latent into "
+            "discrete codes — that is what VQ-VAE does, and it is the same "
+            "principle behind how FAST compresses action chunks via DCT + BPE "
+            "(Part 3)."
+        ),
         code(
             "# ── Variational Autoencoder (VAE) ──\n"
-            "# Same architecture, but encoder outputs mu and log_var.\n"
-            "# We sample z = mu + sigma * epsilon (reparameterization trick).\n"
-            "# Loss = reconstruction_MSE + beta * KL_divergence\n"
+            "# Encoder outputs mu and log_var. Sample z = mu + sigma * epsilon.\n"
+            "# Loss = reconstruction_MSE + beta * KL( q(z|x) || N(0,1) )\n"
+            "# The KL term pushes the data-dependent posterior toward a fixed prior.\n"
             "\n"
             "class VAE(nn.Module):\n"
             "    def __init__(self, input_dim=2, latent_dim=1):\n"
@@ -428,32 +448,70 @@ write_nb(
             "        z = self.reparameterize(mu, logvar)\n"
             "        return self.decoder(z), mu, logvar\n"
             "\n"
-            "vae = VAE(latent_dim=1)\n"
-            "opt = torch.optim.Adam(vae.parameters(), lr=0.01)\n"
+            "# Train VAEs with different KL weights to see the tradeoff\n"
+            "beta_values = [0.001, 0.05, 1.0]\n"
+            "trained_vaes = {}\n"
             "\n"
-            "for step in range(1000):\n"
-            "    opt.zero_grad()\n"
-            "    recon, mu, logvar = vae(data)\n"
-            "    recon_loss = loss_fn(recon, data)\n"
-            "    # KL divergence: D_KL( N(mu,sigma) || N(0,1) )\n"
-            "    kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / n\n"
-            "    loss = recon_loss + 0.05 * kl_loss\n"
-            "    loss.backward()\n"
-            "    opt.step()\n"
+            "for beta in beta_values:\n"
+            "    vae = VAE(latent_dim=1)\n"
+            "    opt = torch.optim.Adam(vae.parameters(), lr=0.01)\n"
+            "    for step in range(1000):\n"
+            "        opt.zero_grad()\n"
+            "        recon, mu, logvar = vae(data)\n"
+            "        recon_loss = loss_fn(recon, data)\n"
+            "        kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / n\n"
+            "        loss = recon_loss + beta * kl_loss\n"
+            "        loss.backward()\n"
+            "        opt.step()\n"
+            "    trained_vaes[beta] = vae\n"
             "\n"
+            "# Compare AE vs VAE at different beta values\n"
             "with torch.no_grad():\n"
-            "    recon_vae, mu, logvar = vae(data)\n"
-            "    kl_value = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / n\n"
+            '    print(f"{\'Model\':<16} {\'β\':>8} {\'Recon MSE\':>12} {\'KL Div\':>12} {\'μ mean\':>10} {\'σ mean\':>10}")\n'
+            "    print('─' * 72)\n"
+            '    print(f"{\'AE (no KL)\':<16} {\'—\':>8} {loss_fn(recon_ae, data).item():>12.4f} {\'—\':>12} {z_ae.mean().item():>10.3f} {z_ae.std().item():>10.3f}")\n'
+            "    for beta in beta_values:\n"
+            "        vae = trained_vaes[beta]\n"
+            "        recon, mu, logvar = vae(data)\n"
+            "        kl_value = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / n\n"
+            "        sigma = torch.exp(0.5 * logvar)\n"
+            '        print(f"{\'VAE\':<16} {beta:>8.3f} {loss_fn(recon, data).item():>12.4f} {kl_value.item():>12.4f} {mu.mean().item():>10.3f} {sigma.mean().item():>10.3f}")\n'
             "\n"
-            'print(f"VAE reconstruction MSE: {loss_fn(recon_vae, data):.4f}")\n'
-            'print(f"KL divergence: {kl_value:.4f}")\n'
-            'print(f"VAE latent: mu={mu.mean():.3f} ± {torch.exp(0.5 * logvar).mean():.3f}")\n'
-            'print(f"AE latent:  mu={z_ae.mean():.3f} ± {z_ae.std():.3f}")\n'
-            'print(f"\\nKL divergence forces the latent toward N(0,1).")\n'
-            'print(f"The VAE latent is smoother and better regularized than the AE latent.")\n'
-            'print(f"\\nCVAE adds conditioning: both encoder and decoder receive")\n'
-            'print(f"the observation as input. ACT conditions on images + joint states")\n'
-            'print(f"so the latent z captures actions appropriate for what the robot sees.")\n'
+            "# Generate from the prior: sample z ~ N(0,1), decode, check quality\n"
+            'print(f"\\nGenerate by sampling z ~ N(0,1) and decoding:")\n'
+            "for beta in beta_values:\n"
+            "    vae = trained_vaes[beta]\n"
+            "    z_sample = torch.randn(100, 1)\n"
+            "    gen = vae.decoder(z_sample)\n"
+            "    # Distance from each generated point to nearest real data point\n"
+            "    avg_dist = torch.cdist(gen, data).min(dim=1).values.mean()\n"
+            '    print(f"  β={beta:.3f}: avg distance to nearest data = {avg_dist:.3f}")\n'
+            'print(f"\\nLow β → good reconstruction, latent is unstructured (bad for generation).")\n'
+            'print(f"High β → latent ≈ N(0,1) (good for generation), poor reconstruction.")\n'
+        ),
+        md(
+            "### Why N(0,1)?\n\n"
+            "The prior is not arbitrary. When you want to **generate** new data "
+            "with a VAE, you sample z ~ N(0,1) and run the decoder. If the "
+            "latent distribution during training was unconstrained (like the AE), "
+            "a random z from N(0,1) would land in a region the decoder never "
+            "saw during training and produce garbage.\n\n"
+            "KL divergence solves this by pulling the encoder's output "
+            "distribution toward N(0,1). The two forces in the loss are:\n\n"
+            "| Term | What it does | Set β to... |\n"
+            "|---|---|---|\n"
+            "| Reconstruction (MSE) | Push z to capture input details "
+            "| ...control this vs KL |\n"
+            "| KL divergence | Pull q(z\\|x) toward N(0,1) "
+            "| ...control this vs MSE |\n\n"
+            "At β=0.001, MSE dominates — the latent encodes data well but "
+            "ignores the prior. At β=1.0, KL dominates — the latent matches "
+            "N(0,1) perfectly but loses reconstruction quality. In practice, "
+            "β is tuned as a hyperparameter (typical range 0.001–0.1).\n\n"
+            "**CVAE** extends this by conditioning both encoder and decoder "
+            "on an observation. ACT feeds in camera images and joint states "
+            "as the condition, so the latent z captures the action "
+            "distribution for a specific situation."
         ),
         md(
             "### 2. Load ACT configuration\n\n"
