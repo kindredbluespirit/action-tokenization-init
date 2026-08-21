@@ -181,8 +181,16 @@ write_nb(
         ),
         md(
             "### 2. Train a BPE tokenizer\n\n"
-            "We train with a small vocabulary (100 tokens) to make the merges "
-            "visible. In practice, GPT-2 uses 50k tokens."
+            "Byte-Pair Encoding works by starting with individual characters "
+            "and repeatedly merging the most frequent pair of adjacent tokens:\n\n"
+            "1. Start with every character in the corpus as its own token\n"
+            "2. Count how often each adjacent pair appears\n"
+            "3. Merge the most frequent pair into a new token\n"
+            "4. Repeat until the vocabulary reaches the target size\n\n"
+            "The name comes from replacing the most common \"byte pair\" "
+            "with a single token. In the next cell we train with a small "
+            "vocabulary (100 tokens) so the merges are easy to inspect. "
+            "GPT-2 uses 50k tokens."
         ),
         code(
             "tokenizer = Tokenizer(models.BPE())\n"
@@ -196,6 +204,13 @@ write_nb(
             "\n"
             "tokenizer.train_from_iterator(corpus, trainer)\n"
             'print(f"Vocab size: {tokenizer.get_vocab_size()}")\n'
+        ),
+        code(
+            "# Show the merge rules BPE learned (most frequent pairs first)\n"
+            "merges = sorted(tokenizer.model.merges, key=tokenizer.model.merges.get)\n"
+            'print(f"Learned {len(merges)} merge rules. First 15:")\n'
+            "for i, (a, b) in enumerate(merges[:15]):\n"
+            '    print(f"  {i+1:2d}. \'{a}\' + \'{b}\' → \'{a}{b}\'")'
         ),
         md(
             "### 3. Inspect the vocabulary\n\n"
